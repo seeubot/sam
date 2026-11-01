@@ -1,46 +1,67 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Header from './components/Header.jsx';
 import StoreGrid from './components/StoreGrid.jsx';
 import ItemModal from './components/ItemModal.jsx';
 import Toast from './components/Toast.jsx';
-import { listItems, createItem, updateItem, deleteItem, uploadImages } from './api.js';
+import {
+  listItems, createItem, updateItem, deleteItem, trackClick, uploadImages,
+} from './api.js';
+
+const PAGE_SIZE = 20;
 
 export default function App() {
   const [items, setItems] = useState([]);
+  const [pagination, setPagination] = useState({ page: 1, pages: 1, total: 0 });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
-  const [category, setCategory] = useState('');
-  const [isActive, setIsActive] = useState('');
+  const [platform, setPlatform] = useState('all');
+  const [page, setPage] = useState(1);
   const [token, setToken] = useState(localStorage.getItem('agri_token') || '');
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [toast, setToast] = useState(null);
+  const debounceRef = useRef(null);
+  const mountedRef = useRef(false);
 
-  const showToast = (message, isErr = false) => {
+  const showToast = (message, isErr = false) =>
     setToast({ message, isErr, id: Date.now() });
-  };
 
-  const refresh = async () => {
+  const refresh = async (targetPage = 1) => {
     setLoading(true);
     setError('');
     try {
-      const data = await listItems({ search, category, isActive });
-      setItems(data);
+      const { items: fetched, pagination: pg } = await listItems({
+        search, platform, page: targetPage, limit: PAGE_SIZE,
+      });
+      setItems((prev) => (targetPage === 1 ? fetched : [...prev, ...fetched]));
+      setPagination(pg);
+      setPage(pg.page || targetPage);
     } catch (e) {
       setError(e.message);
-      setItems([]);
+      if (targetPage === 1) setItems([]);
     } finally {
       setLoading(false);
     }
   };
 
-  // Debounced refresh on filters
+  // Debounced reload on filter change (skip first mount to avoid double fetch)
   useEffect(() => {
-    const t = setTimeout(refresh, 300);
-    return () => clearTimeout(t);
+    if (!mountedRef.current) {
+      mountedRef.current = true;
+      refresh(1);
+      return;
+    }
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => refresh(1), 400);
+    return () => clearTimeout(debounceRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, category, isActive, token]);
+  }, [search, platform, token]);
+
+  const loadMore = () => {
+    if (loading || page >= pagination.pages) return;
+    refresh(page + 1);
+  };
 
   const saveToken = (t) => {
     localStorage.setItem('agri_token', t);
@@ -51,24 +72,24 @@ export default function App() {
   const handleSave = async (form, files) => {
     try {
       let images = [];
-      if (files?.length) {
-        images = await uploadImages(files);
-      }
+      if (files?.length) images = await uploadImages(files);
+
       const payload = {
         title: form.title.trim(),
-        description: form.description.trim() || undefined,
-        price: Number(form.price),
-        currency: form.currency || 'INR',
-        category: form.category,
-        isActive: form.isActive === 'true' || form.isActive === true,
-        affiliateUrl: form.affiliateUrl.trim(),
+        teluguTitle: form.teluguTitle?.trim() || undefined,
+        description: form.description?.trim() || undefined,
+        platform: form.platform,                // amazon | flipkart | meesho | other
+        commissionRate: Number(form.commissionRate) || 0,
+        category: form.category || undefined,
+        affiliateUrl: form.affiliateUrl?.trim() || undefined,
       };
       if (images.length) {
         payload.imageUrl = images[0];
-        payload.images = images;
+        payload.images = images;                // harmless if model ignores it
       }
-      if (editing?._id || editing?.id) {
-        await updateItem(editing._id || editing.id, payload);
+
+      if (editing?._id) {
+        await updateItem(editing._id, payload);
         showToast('Updated ✓');
       } else {
         await createItem(payload);
@@ -76,33 +97,34 @@ export default function App() {
       }
       setModalOpen(false);
       setEditing(null);
-      refresh();
+      refresh(1);
     } catch (e) {
       showToast(e.message, true);
     }
   };
 
   const handleDelete = async (item) => {
-    if (!confirm(`Delete "${item.title || 'item'}"?`)) return;
+    if (!confirm(`Delete "${item.title}"?`)) return;
     try {
-      await deleteItem(item._id || item.id);
+      await deleteItem(item._id);
       showToast('Deleted');
-      refresh();
+      refresh(1);
     } catch (e) {
       showToast(e.message, true);
     }
   };
 
-  const headerAuth = useMemo(
-    () => Boolean(token),
-    [token]
-  );
+  const handleOpen = (item) => {
+    if (!item.affiliateUrl) return showToast('No affiliate URL on this item', true);
+    trackClick(item._id);                        // fire-and-forget
+    window.open(item.affiliateUrl, '_blank', 'noopener');
+  };
 
   return (
     <>
       <Header
         token={token}
-        authed={headerAuth}
+        authed={Boolean(token)}
         onSaveToken={saveToken}
         onAdd={() => {
           if (!token) return showToast('Paste an admin JWT first', true);
@@ -114,27 +136,26 @@ export default function App() {
       <main className="container">
         <div className="toolbar">
           <input
-            placeholder="Search items…"
+            placeholder="Search deals…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
-          <select value={category} onChange={(e) => setCategory(e.target.value)}>
-            <option value="">All categories</option>
-            <option value="seeds">Seeds</option>
-            <option value="fertilizer">Fertilizer</option>
-            <option value="pesticide">Pesticide</option>
-            <option value="equipment">Equipment</option>
-            <option value="tools">Tools</option>
+          <select value={platform} onChange={(e) => setPlatform(e.target.value)}>
+            <option value="all">All platforms</option>
+            <option value="amazon">Amazon</option>
+            <option value="flipkart">Flipkart</option>
+            <option value="meesho">Meesho</option>
             <option value="other">Other</option>
           </select>
-          <select value={isActive} onChange={(e) => setIsActive(e.target.value)}>
-            <option value="">Any status</option>
-            <option value="true">Active only</option>
-            <option value="false">Inactive only</option>
-          </select>
-          <button className="ghost" onClick={refresh} disabled={loading}>
+          <button className="ghost" onClick={() => refresh(1)} disabled={loading}>
             {loading ? 'Loading…' : 'Refresh'}
           </button>
+        </div>
+
+        <div className="count-row">
+          {loading
+            ? 'Loading…'
+            : `${pagination.total} ${pagination.total === 1 ? 'deal' : 'deals'}`}
         </div>
 
         {error && <div className="empty" style={{ color: 'var(--danger)' }}>{error}</div>}
@@ -149,11 +170,16 @@ export default function App() {
               setModalOpen(true);
             }}
             onDelete={handleDelete}
-            onOpen={(it) => {
-              if (it.affiliateUrl) window.open(it.affiliateUrl, '_blank', 'noopener');
-              else showToast('No affiliate URL', true);
-            }}
+            onOpen={handleOpen}
           />
+        )}
+
+        {!error && page < pagination.pages && (
+          <div style={{ textAlign: 'center', marginTop: 20 }}>
+            <button className="ghost" onClick={loadMore} disabled={loading}>
+              {loading ? 'Loading…' : 'Load more'}
+            </button>
+          </div>
         )}
       </main>
 
