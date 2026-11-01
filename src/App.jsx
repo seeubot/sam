@@ -4,14 +4,15 @@ import StoreGrid from './components/StoreGrid.jsx';
 import ItemModal from './components/ItemModal.jsx';
 import Toast from './components/Toast.jsx';
 import {
-  listItems, createItem, updateItem, deleteItem, trackClick, uploadImages,
+  listItems, getStats, createItem, updateItem, deleteItem, uploadImages,
 } from './api.js';
 
-const PAGE_SIZE = 20;
+const PAGE_SIZE = 100;
 
 export default function App() {
   const [items, setItems] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, pages: 1, total: 0 });
+  const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
@@ -31,12 +32,14 @@ export default function App() {
     setLoading(true);
     setError('');
     try {
-      const { items: fetched, pagination: pg } = await listItems({
-        search, platform, page: targetPage, limit: PAGE_SIZE,
-      });
+      const [{ items: fetched, pagination: pg }, statsTotals] = await Promise.all([
+        listItems({ search, platform, page: targetPage, limit: PAGE_SIZE }),
+        getStats(30).catch(() => null),
+      ]);
       setItems((prev) => (targetPage === 1 ? fetched : [...prev, ...fetched]));
       setPagination(pg);
       setPage(pg.page || targetPage);
+      if (statsTotals) setStats(statsTotals);
     } catch (e) {
       setError(e.message);
       if (targetPage === 1) setItems([]);
@@ -45,7 +48,6 @@ export default function App() {
     }
   };
 
-  // Debounced reload on filter change (skip first mount to avoid double fetch)
   useEffect(() => {
     if (!mountedRef.current) {
       mountedRef.current = true;
@@ -58,36 +60,19 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search, platform, token]);
 
-  const loadMore = () => {
-    if (loading || page >= pagination.pages) return;
-    refresh(page + 1);
-  };
-
   const saveToken = (t) => {
     localStorage.setItem('agri_token', t);
     setToken(t);
     showToast('Token saved');
   };
 
-  const handleSave = async (form, files) => {
+  const handleSave = async (payload, files) => {
     try {
-      let images = [];
-      if (files?.length) images = await uploadImages(files);
-
-      const payload = {
-        title: form.title.trim(),
-        teluguTitle: form.teluguTitle?.trim() || undefined,
-        description: form.description?.trim() || undefined,
-        platform: form.platform,                // amazon | flipkart | meesho | other
-        commissionRate: Number(form.commissionRate) || 0,
-        category: form.category || undefined,
-        affiliateUrl: form.affiliateUrl?.trim() || undefined,
-      };
-      if (images.length) {
-        payload.imageUrl = images[0];
-        payload.images = images;                // harmless if model ignores it
+      let imageUrls = [];
+      if (files?.length) {
+        imageUrls = await uploadImages(files);
+        if (imageUrls[0] && !payload.imageUrl) payload.imageUrl = imageUrls[0];
       }
-
       if (editing?._id) {
         await updateItem(editing._id, payload);
         showToast('Updated ✓');
@@ -100,6 +85,7 @@ export default function App() {
       refresh(1);
     } catch (e) {
       showToast(e.message, true);
+      throw e;
     }
   };
 
@@ -115,9 +101,8 @@ export default function App() {
   };
 
   const handleOpen = (item) => {
-    if (!item.affiliateUrl) return showToast('No affiliate URL on this item', true);
-    trackClick(item._id);                        // fire-and-forget
-    window.open(item.affiliateUrl, '_blank', 'noopener');
+    if (!item.productUrl) return showToast('No product URL on this item', true);
+    window.open(item.productUrl, '_blank', 'noopener');
   };
 
   return (
@@ -134,9 +119,26 @@ export default function App() {
       />
 
       <main className="container">
+        {stats && (
+          <div className="stats-row">
+            <div className="stat-box">
+              <div className="stat-label">Clicks (30d)</div>
+              <div className="stat-value">{stats.clicks || 0}</div>
+            </div>
+            <div className="stat-box">
+              <div className="stat-label">Est. revenue</div>
+              <div className="stat-value">₹{stats.estimatedRevenue || 0}</div>
+            </div>
+            <div className="stat-box">
+              <div className="stat-label">Total items</div>
+              <div className="stat-value">{items.length}</div>
+            </div>
+          </div>
+        )}
+
         <div className="toolbar">
           <input
-            placeholder="Search deals…"
+            placeholder="Search items…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
@@ -150,12 +152,6 @@ export default function App() {
           <button className="ghost" onClick={() => refresh(1)} disabled={loading}>
             {loading ? 'Loading…' : 'Refresh'}
           </button>
-        </div>
-
-        <div className="count-row">
-          {loading
-            ? 'Loading…'
-            : `${pagination.total} ${pagination.total === 1 ? 'deal' : 'deals'}`}
         </div>
 
         {error && <div className="empty" style={{ color: 'var(--danger)' }}>{error}</div>}
@@ -176,7 +172,7 @@ export default function App() {
 
         {!error && page < pagination.pages && (
           <div style={{ textAlign: 'center', marginTop: 20 }}>
-            <button className="ghost" onClick={loadMore} disabled={loading}>
+            <button className="ghost" onClick={() => refresh(page + 1)} disabled={loading}>
               {loading ? 'Loading…' : 'Load more'}
             </button>
           </div>
@@ -186,10 +182,7 @@ export default function App() {
       {modalOpen && (
         <ItemModal
           item={editing}
-          onClose={() => {
-            setModalOpen(false);
-            setEditing(null);
-          }}
+          onClose={() => { setModalOpen(false); setEditing(null); }}
           onSave={handleSave}
         />
       )}
