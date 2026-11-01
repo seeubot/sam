@@ -14,9 +14,7 @@ async function parse(res) {
   return data;
 }
 
-// ─── LIST ────────────────────────────────────────────────────────────
-// Returns full response: { items, pagination: {page,pages,total,limit} }
-export async function listItems({ search, platform, page = 1, limit = 20 } = {}) {
+export async function listItems({ search, platform, page = 1, limit = 100 } = {}) {
   const p = new URLSearchParams({ page, limit });
   if (search) p.set('search', search);
   if (platform && platform !== 'all') p.set('platform', platform);
@@ -24,8 +22,14 @@ export async function listItems({ search, platform, page = 1, limit = 20 } = {})
   const data = await parse(res);
   return {
     items: data.items || [],
-    pagination: data.pagination || { page, pages: 1, total: 0, limit },
+    pagination: data.pagination || { page, pages: 1, total: data.items?.length || 0, limit },
   };
+}
+
+export async function getStats(days = 30) {
+  const res = await fetch(`${API_BASE}/api/affiliate/stats?days=${days}`, { headers: authHeaders() });
+  const data = await parse(res);
+  return data.totals || null;
 }
 
 export async function getItem(id) {
@@ -33,7 +37,6 @@ export async function getItem(id) {
   return parse(res);
 }
 
-// ─── CRUD (requires routes/affiliate.js to implement these) ──────────
 export async function createItem(payload) {
   const res = await fetch(`${API_BASE}/api/affiliate/items`, {
     method: 'POST',
@@ -60,19 +63,6 @@ export async function deleteItem(id) {
   return parse(res);
 }
 
-// ─── CLICK TRACK (confirmed in mobile api.js) ────────────────────────
-export async function trackClick(id) {
-  try {
-    await fetch(`${API_BASE}/api/affiliate/items/${id}/click`, {
-      method: 'POST',
-      headers: authHeaders(),
-    });
-  } catch {
-    /* non-blocking */
-  }
-}
-
-// ─── IMAGE UPLOAD (uses IMAGE_SERVER_URL, field name `files`) ────────
 export async function uploadImages(files) {
   if (!files?.length) return [];
   const fd = new FormData();
