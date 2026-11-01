@@ -7,10 +7,11 @@ const PLATFORM_META = {
 
 export default function StoreCard({ item, onEdit, onDelete, onOpen }) {
   const meta = PLATFORM_META[item.platform] || PLATFORM_META.other;
-  const img = item.imageUrl || item.image || '';
+  const img = item.imageUrl || '';
+  const isActive = item.isActive !== false;
 
   return (
-    <div className="card">
+    <div className={`card ${!isActive ? 'inactive' : ''}`}>
       <div className="img">
         {img ? (
           <img
@@ -30,17 +31,21 @@ export default function StoreCard({ item, onEdit, onDelete, onOpen }) {
         <span className="badge platform" style={{ background: meta.color }}>
           {meta.label.toUpperCase()}
         </span>
+        {!isActive && <span className="badge inactive">INACTIVE</span>}
       </div>
 
       <div className="body">
         <div className="name">{item.title}</div>
         {item.teluguTitle && <div className="telugu">{item.teluguTitle}</div>}
-        <div className="meta">{item.category || ''}</div>
+        {item.description && <div className="meta">{item.description}</div>}
+        {item.category && <div><span className="tag">{item.category}</span></div>}
       </div>
 
       <div className="actions">
         <button className="ghost" onClick={onEdit}>Edit</button>
-        <button className="ghost" onClick={onOpen}>Open ↗</button>
+        {item.productUrl && (
+          <button className="ghost" onClick={() => onOpen(item)}>Open ↗</button>
+        )}
         <button className="danger" onClick={onDelete}>Delete</button>
       </div>
     </div>
